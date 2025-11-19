@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WebXR AR — Modell elhelyezése asztalon</title>
+<style>
+html,body{height:100%;margin:0;overflow:hidden;font-family:system-ui,Arial}
+#info{position:absolute;left:10px;top:10px;z-index:2;background:rgba(0,0,0,0.4);color:white;padding:8px;border-radius:6px}
+#enter-ar{position:absolute;right:10px;top:10px;z-index:2}
+canvas{display:block}
+</style>
+</head>
+<body>
+<div id="info">Érintés = elhelyezés. 10x10 centis kocka lesz kirakva.</div>
+<div id="enter-ar"></div>
+
+
+<script type="module">
+// ---- IMPORTS ----
+import * as THREE from 'https://unpkg.com/three@0.154.0/build/three.module.js';
+import { ARButton } from 'https://unpkg.com/three@0.154.0/examples/jsm/webxr/ARButton.js';
+
+// ---- CONSTANTS ----
+const CUBE_SIZE = 0.1; // 10cm in meters
+const CUBE_COLOR = 0xff6600;
+const RETICLE_COLOR = 0x00ffff;
+const RING_INNER_RADIUS = 0.07;
+const RING_OUTER_RADIUS = 0.09;
+
+// ---- GLOBAL VARIABLES ----
+let camera, scene, renderer;
+let controller;
+let reticle; // a találati jelző, jelzi ahol a modell elhelyezhető
+let cubeModel = null; // 10x10 centis kocka template
+
+// Hit test változók
+let hitTestSource = null;
+let viewerSpace = null;
+
+
+init();
+
+
+async function init(){
+const container = document.body;
+
+
+// Renderer
+renderer = new THREE.WebGLRenderer({antialias:true,alpha:true});
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.xr.enabled = true;
+container.appendChild(renderer.domElement);
+
+
+// Scene & camera
+scene = new THREE.Scene();
+camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.01, 20);
+
+
+// Light
+const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
+scene.add(light);
+
+
+// Create scene objects
+createReticle();
+createCubeTemplate();
+
+	// Setup AR and controls
+	setupARControls();
+
+	// Start render loop
+	renderer.setAnimationLoop(render);
+}
+
+
+// ---- HELPER FUNCTIONS ----
+function createReticle() {
+	const ringGeometry = new THREE.RingGeometry(RING_INNER_RADIUS, RING_OUTER_RADIUS, 32)
+		.rotateX(-Math.PI / 2);
+	const ringMaterial = new THREE.MeshBasicMaterial({
+		color: RETICLE_COLOR,
+		opacity: 0.9,
+		transparent: true
+	});
+	reticle = new THREE.Mesh(ringGeometry, ringMaterial);
+	reticle.matrixAutoUpdate = false;
+	reticle.visible = false;
+	scene.add(reticle);
+}
+
+function createCubeTemplate() {
+	const cubeGeometry = new THREE.BoxGeometry(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE);
+	const cubeMaterial = new THREE.MeshPhongMaterial({
+		color: CUBE_COLOR,
+		shininess: 100
+	});
+	cubeModel = new THREE.Mesh(cubeGeometry, cubeMaterial);
+	cubeModel.visible = false;
+	scene.add(cubeModel);
+}
+
+function setupARControls() {
+	// AR button setup
+	const arButton = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
+	document.getElementById('enter-ar').appendChild(arButton);
+
+	// Controller setup
+	controller = renderer.xr.getController(0);
+	controller.addEventListener('select', onSelect);
+	scene.add(controller);
+
+	// WebXR session event handlers
+	renderer.xr.addEventListener('sessionstart', onSessionStart);
+}
+
+
+// ---- EVENT HANDLERS ----
+function onSelect() {
+	try {
+		if (reticle.visible && cubeModel) {
+			placeCube();
+		}
+	} catch (error) {
+		console.error('Error placing cube:', error);
+	}
+}
+
+function placeCube() {
+	const newCube = cubeModel.clone();
+	newCube.position.setFromMatrixPosition(reticle.matrix);
+	newCube.visible = true;
+	scene.add(newCube);
+}
+
+function onSessionStart() {
+	const session = renderer.xr.getSession();
+	session.requestReferenceSpace('viewer')
+		.then(space => {
+			viewerSpace = space;
+		})
+		.catch(error => {
+			console.error('Error setting up viewer space:', error);
+		});
+}
+
+
+// ---- RENDER LOOP ----
+function render(timestamp, frame) {
+	if (frame) {
+		updateHitTest(frame);
+	}
+	renderer.render(scene, camera);
+}
+
+function updateHitTest(frame) {
+	try {
+		const referenceSpace = renderer.xr.getReferenceSpace();
+		const session = renderer.xr.getSession();
+		
+		if (!session || !viewerSpace) return;
+		
+		// Initialize hit test source if needed
+		if (!hitTestSource && session.requestHitTestSource) {
+			session.requestHitTestSource({ space: viewerSpace })
+				.then(source => {
+					hitTestSource = source;
+				})
+				.catch(error => {
+					console.error('Error creating hit test source:', error);
+				});
+			return;
+		}
+		
+		// Perform hit test
+		if (hitTestSource) {
+			const hitTestResults = frame.getHitTestResults(hitTestSource);
+			if (hitTestResults.length > 0) {
+				const hit = hitTestResults[0];
+				reticle.visible = true;
+				reticle.matrix.fromArray(hit.getPose(referenceSpace).transform.matrix);
+			} else {
+				reticle.visible = false;
+			}
+		}
+	} catch (error) {
+		console.error('Error in hit test update:', error);
+		reticle.visible = false;
+	}
+}
+</script>
+</body>
+</html>
